@@ -1,10 +1,11 @@
 kind: hosted
 name: toolbox-langgraph
-description: LangGraph agent wired for toolbox MCP in Microsoft Foundry.
+description: LangGraph agent with Fabric Data Agent MCP integration on Microsoft Foundry.
 metadata:
   tags:
     - AI Agent Hosting
     - LangGraph
+    - Fabric Data Agent
 protocols:
   - protocol: responses
     version: 1.0.0
@@ -16,3 +17,5 @@ environment_variables:
     value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
   - name: TOOLBOX_NAME
     value: ${TOOLBOX_NAME}
+  - name: FABRIC_MCP_ENDPOINT
+    value: ${FABRIC_MCP_ENDPOINT}

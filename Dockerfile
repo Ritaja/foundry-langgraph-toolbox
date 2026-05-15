@@ -3,7 +3,5 @@ WORKDIR /app
 COPY . user_agent/
 WORKDIR /app/user_agent
 RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-# Generate synthetic insurance data into the DuckDB database
-RUN python generate_synthetic_data.py --db-path insurance_data.db --customers 1000
 EXPOSE 8088
 CMD ["python3", "main.py"]

@@ -1,14 +1,14 @@
-# Insurance CRM Agent — LangGraph + DuckDB + Foundry Toolbox
+# Fabric Data Agent — LangGraph + MCP + Foundry Toolbox
 
-[![LangGraph](https://img.shields.io/badge/LangGraph-00B9FF?style=flat&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/) [![DuckDB](https://img.shields.io/badge/DuckDB-FFD93D?style=flat&logo=duckdb&logoColor=black)](https://duckdb.org/) [![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-0078D4?style=flat&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/services/openai/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-00B9FF?style=flat&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/) [![Microsoft Fabric](https://img.shields.io/badge/Microsoft%20Fabric-0078D4?style=flat&logo=microsoftazure&logoColor=white)](https://www.microsoft.com/microsoft-fabric) [![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-0078D4?style=flat&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/services/openai/)
 
-A LangGraph ReAct agent with a **custom DuckDB-backed CRM tool** for insurance analytics, deployed on **Microsoft Foundry** with optional toolbox MCP integration.
+A LangGraph ReAct agent that connects to a **Microsoft Fabric Data Agent** via its MCP endpoint, deployed on **Microsoft Foundry** with optional toolbox integration for web search, code interpreter, and AI search.
 
 ## Features
 
-- **Synthetic insurance data** — generates 1,000 customers, ~2,500 policies, and ~900 claims using `faker` + `duckdb`
-- **5 CRM tools** — customer search (by name/ID), policy lookup, customer listing, and a natural-language-to-SQL analytics tool
-- **Toolbox MCP integration** — connects to Foundry toolbox for additional tools (web search, code interpreter, AI search)
+- **Fabric Data Agent (MCP)** — queries data in Fabric lakehouses, warehouses, and semantic models through the Fabric Data Agent's MCP-compatible endpoint
+- **Toolbox MCP integration** — connects to a Foundry toolbox for additional tools (web search, code interpreter, AI search)
+- **Web search** — built-in Bing web search via Azure OpenAI Responses API for real-time information
 - **Responses Protocol** — serves requests on port `8088` via `ResponsesAgentServerHost`
 - **Multi-turn conversation** — maintains context across turns with history support
 
@@ -22,14 +22,13 @@ graph TB
 
     subgraph "Agent Layer"
         ORCH[Orchestrator — LangGraph ReAct]
-        CRM_TOOLS[CRM Tools]
         WEB[Web Search Tool]
-        MCP[Toolbox MCP Tools]
+        MCP_TB[Toolbox MCP Tools]
     end
 
-    subgraph "Data Layer"
-        DUCKDB[(DuckDB)]
-        SYNTH[Synthetic Data Generator]
+    subgraph "Fabric"
+        FABRIC_MCP[Fabric Data Agent MCP]
+        LAKEHOUSE[(Lakehouse / Warehouse)]
     end
 
     subgraph "AI"
@@ -37,57 +36,35 @@ graph TB
     end
 
     API --> ORCH
-    ORCH --> CRM_TOOLS
+    ORCH --> FABRIC_MCP
     ORCH --> WEB
-    ORCH --> MCP
-    CRM_TOOLS --> DUCKDB
-    SYNTH --> DUCKDB
+    ORCH --> MCP_TB
+    FABRIC_MCP --> LAKEHOUSE
     ORCH --> LLM
-    CRM_TOOLS -->|crm_analytics| LLM
 
     style ORCH fill:#e1f5fe
-    style DUCKDB fill:#fff3e0
+    style FABRIC_MCP fill:#fff3e0
     style LLM fill:#e8f5e8
 ```
-
-## CRM Tools
-
-| Tool | Description |
-|------|-------------|
-| `crm_search_name` | Search customers by name (case-insensitive, partial match) |
-| `crm_search_id` | Look up a customer by numeric ID |
-| `crm_get_policies` | Get full policy details for a customer |
-| `crm_list_customers` | List customers with summary info (first 50) |
-| `crm_analytics` | Natural-language-to-SQL analytics (LLM-powered) |
-
-### Example Analytics Queries
-
-- "How many customers do we have?"
-- "What is the total coverage amount by policy type?"
-- "Show me all pending claims"
-- "What is the loss ratio for each policy type?"
-- "Which customer has the highest claim amount?"
 
 ## Quick Start (Local)
 
 ```bash
 # 1. Copy and fill in the environment file
 cp .env.example .env
-# Edit .env — set FOUNDRY_PROJECT_ENDPOINT and AZURE_AI_MODEL_DEPLOYMENT_NAME
+# Edit .env — set FOUNDRY_PROJECT_ENDPOINT, AZURE_AI_MODEL_DEPLOYMENT_NAME,
+# and FABRIC_MCP_ENDPOINT
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Generate synthetic insurance data
-python generate_synthetic_data.py --db-path insurance_data.db
-
-# 4. Start the agent
+# 3. Start the agent
 python main.py
 
-# 5. Invoke
+# 4. Invoke
 curl -X POST http://localhost:8088/responses \
   -H "Content-Type: application/json" \
-  -d '{"input": "Search for customers named Smith"}'
+  -d '{"input": "What tables are available in the data?"}'
 ```
 
 ## Deploy as a Hosted Agent
@@ -102,17 +79,15 @@ curl -X POST http://localhost:8088/responses \
 
 ```bash
 # 1. Set required environment variables
-azd env set enableHostedAgentVNext "true" -e my-env
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-4o" -e my-env
+azd env set FABRIC_MCP_ENDPOINT "https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent" -e my-env
 
 # 2. Provision infrastructure and deploy
 azd up -e my-env
 
 # 3. Invoke the deployed agent
-azd ai agent invoke --new-session "How many customers do we have?" --timeout 120
+azd ai agent invoke --new-session "What data is available?" --timeout 120
 ```
-
-> The Docker build automatically generates synthetic data — no manual step needed when deploying.
 
 ## Environment Variables
 
@@ -120,42 +95,34 @@ azd ai agent invoke --new-session "How many customers do we have?" --timeout 120
 |----------|----------|-------------|
 | `FOUNDRY_PROJECT_ENDPOINT` | **Yes** | Foundry project endpoint — platform-injected at runtime |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | **Yes** | Model deployment name (e.g. `gpt-4o`) |
+| `FABRIC_MCP_ENDPOINT` | **Yes** | Fabric Data Agent MCP endpoint URL |
 | `TOOLBOX_NAME` | No | Toolbox name — constructs the MCP endpoint automatically |
 | `TOOLBOX_ENDPOINT` | No | Full toolbox MCP endpoint URL (alternative to `TOOLBOX_NAME`) |
-| `CRM_DB_PATH` | No | Path to the DuckDB database (default: `insurance_data.db`) |
 
 ## Project Structure
 
 ```
 ├── main.py                      # Agent entry point + Responses Protocol server
-├── orchestrator.py              # LangGraph ReAct agent builder (CRM + toolbox tools)
-├── generate_synthetic_data.py   # Faker + DuckDB synthetic data generator
-├── agents/
-│   └── crm/
-│       ├── agent.py             # CRM agent module
-│       ├── tools.py             # 5 DuckDB-backed CRM tools
-│       └── SKILL.md             # CRM skill instructions
+├── orchestrator.py              # LangGraph ReAct agent builder (MCP + web search)
 ├── tools/
 │   └── web_search.py            # Bing web search via Azure OpenAI Responses API
 ├── SYSTEM_PROMPT.md             # Agent system prompt
 ├── agent.yaml                   # Foundry agent definition
 ├── agent.manifest.yaml          # Toolbox manifest (web_search, code_interpreter, ai_search)
-├── Dockerfile                   # Container build (includes data generation)
+├── Dockerfile                   # Container build
 ├── requirements.txt             # Python dependencies
 └── azure.yaml                   # azd deployment configuration
 ```
 
-## Database Schema
+## Fabric Data Agent
 
-The DuckDB database contains three tables:
+The agent connects to a [Microsoft Fabric Data Agent](https://learn.microsoft.com/fabric/data-engineering/data-agent-concept) via its MCP endpoint. The Fabric Data Agent exposes tools that allow the LLM to query data stored in Fabric lakehouses, warehouses, and semantic models.
 
-- **customers** — `customer_id`, `first_name`, `last_name`, `email`, `phone`, `date_of_birth`, `address`, `city`, `state`, `zip_code`
-- **policies** — `policy_id`, `customer_id`, `policy_type` (auto/home/travel/life), `coverage_amount`, `premium_amount`, `start_date`, `end_date`, `status`
-- **claims** — `claim_id`, `policy_id`, `claim_amount`, `claim_date`, `claim_status`, `claim_type`, `description`
+Authentication uses `DefaultAzureCredential` with the `https://api.fabric.microsoft.com/.default` scope.
 
 ## Toolbox Configuration
 
-The toolbox is configured in `azure.yaml` and `agent.manifest.yaml`. The manifest declares tools in the `agent-tools` toolbox: `web_search`, `code_interpreter`, and `azure_ai_search`. These are **optional** — the CRM tools work independently of the toolbox.
+The toolbox is configured in `azure.yaml` and `agent.manifest.yaml`. The manifest declares tools in the `agent-tools` toolbox: `web_search`, `code_interpreter`, and `azure_ai_search`. These are **optional** — the Fabric Data Agent tools work independently of the toolbox.
 
 ## Contributing
 
@@ -164,4 +131,3 @@ This project welcomes contributions and suggestions.
 ## License
 
 See [LICENSE.md](LICENSE.md).
-

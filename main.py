@@ -1,11 +1,9 @@
-"""Multi-agent orchestrator with LangGraph on Azure AI Foundry.
+"""LangGraph agent on Azure AI Foundry with Fabric Data Agent MCP.
 
-An orchestrator agent classifies user intent and routes to specialist
-sub-agents (e.g. CRM agent for customer/policy lookups).  Falls back to a
-general-purpose LLM reply for anything else.
-
-Optionally connects to an Azure AI Foundry toolbox via MCP for additional
-tool capabilities.
+A ReAct agent that connects to a Microsoft Fabric Data Agent via its MCP
+endpoint, giving the LLM access to data stored in Fabric lakehouses,
+warehouses, and semantic models.  Optionally connects to an Azure AI Foundry
+toolbox for additional capabilities (web search, code interpreter, etc.).
 
 ## Platform-Injected Environment Variables (container-image-spec)
 
@@ -17,6 +15,7 @@ The Foundry platform injects these at runtime:
 ## User-Defined Variables
 
 - `AZURE_AI_MODEL_DEPLOYMENT_NAME` — chat model deployment name
+- `FABRIC_MCP_ENDPOINT` — Fabric Data Agent MCP endpoint URL
 - `TOOLBOX_ENDPOINT` — full toolbox MCP endpoint URL (optional)
 """
 
@@ -111,40 +110,68 @@ TOOLBOX_ENDPOINT = (
 )
 _TOOLBOX_FEATURES = os.getenv("FOUNDRY_AGENT_TOOLBOX_FEATURES", "Toolboxes=V1Preview")
 
+# ── Fabric Data Agent MCP endpoint ──────────────────────────────────────────
+
+FABRIC_MCP_ENDPOINT = os.getenv(
+    "FABRIC_MCP_ENDPOINT",
+    "https://api.fabric.microsoft.com/v1/mcp/workspaces/b184fc45-5853-4116-9527-5f5b500d8961/dataagents/9ea0370e-6950-46b3-9736-816677ddd08e/agent",
+)
 
 # ── Agent creation ──────────────────────────────────────────────────────────
 
 
-async def quickstart():
-    """Build the multi-agent orchestrator graph with toolbox tools."""
-    toolbox_tools = []
-    mcp_client = None
+class _FabricTokenAuth(httpx.Auth):
+    """httpx Auth that injects a Fabric-scoped bearer token."""
 
+    _fabric_token_provider = get_bearer_token_provider(
+        DefaultAzureCredential(),
+        "https://api.fabric.microsoft.com/.default",
+    )
+
+    def auth_flow(self, request):
+        request.headers["Authorization"] = f"Bearer {self._fabric_token_provider()}"
+        yield request
+
+
+async def quickstart():
+    """Build the ReAct agent graph with Fabric + toolbox MCP tools."""
+    mcp_servers: dict = {}
+
+    # Fabric Data Agent MCP
+    if FABRIC_MCP_ENDPOINT:
+        logger.info(f"Connecting to Fabric Data Agent MCP: {FABRIC_MCP_ENDPOINT}")
+        mcp_servers["fabric_data_agent"] = {
+            "url": FABRIC_MCP_ENDPOINT,
+            "transport": "streamable_http",
+            "auth": _FabricTokenAuth(),
+        }
+
+    # Foundry Toolbox MCP
     if TOOLBOX_ENDPOINT:
         logger.info(f"Connecting to toolbox: {TOOLBOX_ENDPOINT}")
-        toolbox_auth = _AzureTokenAuth()
         extra_headers = {"Foundry-Features": _TOOLBOX_FEATURES} if _TOOLBOX_FEATURES else {}
+        mcp_servers["toolbox"] = {
+            "url": TOOLBOX_ENDPOINT,
+            "transport": "streamable_http",
+            "headers": extra_headers,
+            "auth": _AzureTokenAuth(),
+        }
 
-        mcp_client = MultiServerMCPClient(
-            {
-                "toolbox": {
-                    "url": TOOLBOX_ENDPOINT,
-                    "transport": "streamable_http",
-                    "headers": extra_headers,
-                    "auth": toolbox_auth,
-                }
-            }
-        )
-        toolbox_tools = await mcp_client.get_tools()
-        for t in toolbox_tools:
+    mcp_client = None
+    all_mcp_tools: list = []
+
+    if mcp_servers:
+        mcp_client = MultiServerMCPClient(mcp_servers)
+        all_mcp_tools = await mcp_client.get_tools()
+        for t in all_mcp_tools:
             t.handle_tool_error = True
-        tool_names = [t.name for t in toolbox_tools]
-        logger.info(f"Loaded {len(toolbox_tools)} tools from toolbox MCP: {tool_names}")
+        tool_names = [t.name for t in all_mcp_tools]
+        logger.info(f"Loaded {len(all_mcp_tools)} tools from MCP endpoints: {tool_names}")
     else:
-        logger.info("No TOOLBOX_NAME or TOOLBOX_ENDPOINT set — toolbox tools disabled")
+        logger.info("No MCP endpoints configured")
 
-    graph = build_orchestrator_graph(llm, toolbox_tools=toolbox_tools)
-    logger.info("Multi-agent orchestrator ready (crm agent + toolbox tools active)")
+    graph = build_orchestrator_graph(llm, mcp_tools=all_mcp_tools)
+    logger.info("Agent ready (Fabric Data Agent + toolbox tools active)")
     return graph, mcp_client
 
 
