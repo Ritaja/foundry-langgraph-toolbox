@@ -1,68 +1,63 @@
 ---
 name: crm
-description: Search and retrieve insurance customer profiles and policy details from the CRM system
+description: Search and retrieve insurance customer profiles, policies, and claims from the CRM database (DuckDB)
 enabled: true
 ---
 
 ## Instructions
 
-When the user asks about an insurance customer, policyholder, or their policies, use this skill to retrieve customer and policy data from the CRM.
+When the user asks about an insurance customer, policyholder, their policies, or claims, use the CRM tools to retrieve data from the DuckDB insurance database.
 
-**IMPORTANT**: Always call the `crm` tool with `domain: "insurance"` for this use-case.
+The CRM database contains three tables: **customers** (1,000 records), **policies** (~2,500 records across auto/home/travel/life types), and **claims** (~900 records).
 
-### 1. Identify the Lookup Method
+### 1. Choose the Right Tool
 
-Determine how to search based on what the user provides:
-
-| User provides | Tool parameters | Example |
-|---------------|-----------------|---------|
-| A name or partial name | `domain: "insurance", action: "search_name", query: "<name>"` | "Look up John Doe", "find customer Schneider" |
-| A customer ID | `domain: "insurance", action: "search_id", query: "<clientID>"` | "Get customer 987654321" |
-| Request for full policy details | `domain: "insurance", action: "policies", query: "<clientID>"` | "Show all policies for 987654321" |
-| General overview | `domain: "insurance", action: "list"` | "List all insurance customers" |
+| User provides | Tool | Example |
+|---------------|------|---------|
+| A name or partial name | `crm_search_name` | "Look up John Doe", "find customer Smith" |
+| A customer ID | `crm_search_id` | "Get customer 42" |
+| Request for full policy details | `crm_get_policies` | "Show all policies for customer 42" |
+| General overview | `crm_list_customers` | "List insurance customers" |
+| Complex analytics / aggregation | `crm_analytics` | "What is the total coverage by policy type?", "Show loss ratios" |
 
 - **Name search** is case-insensitive and supports partial matching.
-- **ID search** requires an exact client ID match.
-- If the user asks about policy numbers, coverage, or active products for a specific customer, use `action: "policies"`.
+- **ID search** requires a numeric customer ID.
+- **Analytics** converts natural language to SQL — use for aggregate queries, trends, comparisons, or any question the structured tools can't answer directly.
 
 ### 2. Present Customer Profile
 
 When displaying customer information, organize it clearly:
 
 **Personal Details**
-- Full name, date of birth, nationality
-- Contact details
-- Address
+- Full name, date of birth
+- Email, phone
+- City, state
 
 **Policy Summary**
-- Number of active and inactive policies
-- Policy numbers
-- Product types
-- Policy status, effective date, and expiry date
+- Number of active and total policies
+- Policy types (auto, home, travel, life)
+- Coverage amounts and premiums
 
 ### 3. Present Policy Data
 
-When the user asks for full policy details, use `action: "policies"` and present each policy clearly.
+When the user asks for full policy details, use `crm_get_policies` and present each policy:
+- Policy ID and type
+- Status (active/expired/cancelled/suspended)
+- Start and end dates
+- Coverage amount and premium amount
 
-Include:
-- Policy number
-- Product type
-- Policy status
-- Effective and expiry dates
-- Coverage level or coverage type
-- Key coverage details, limits, deductibles, beneficiaries, and optional add-ons when present
+### 4. Analytics Queries
 
-### 4. When to Use
-
-- Customer lookup by name or ID
-- Retrieving customer contact details and address
-- Reviewing which policies a customer holds
-- Inspecting detailed policy attributes for a specific customer
-- Preparing customer context before using `rag-search` for policy wording or exclusions
+Use `crm_analytics` for questions like:
+- "What is the total coverage amount by policy type?"
+- "Show me all pending claims"
+- "Which customer has the highest claim amount?"
+- "What is our profit analysis by policy type?"
+- "What is the loss ratio for each policy type?"
 
 ### Response Guidelines
 
-- Present customer and policy data clearly using structured formatting.
-- Respect data sensitivity and avoid sharing unnecessary personal information.
-- If multiple customers match a search, present a short summary and ask which one the user means.
-- Note that CRM data reflects internal customer records and policy attributes, not claim decisions or authoritative legal wording.
+- Present data clearly using structured formatting.
+- If multiple customers match a search, present a summary and ask which one.
+- For analytics results, include the relevant numbers and explain insights.
+- Note that CRM data reflects the synthetic insurance database — not real customer records.
