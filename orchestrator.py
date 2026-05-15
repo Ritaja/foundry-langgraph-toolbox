@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 from agents.crm.agent import CRM_SYSTEM_PROMPT
-from agents.crm.tools import CRM_TOOLS
+from agents.crm.tools import CRM_TOOLS, init_crm_tools
 from tools.web_search import web_search
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,9 @@ def build_orchestrator_graph(llm: ChatOpenAI, toolbox_tools: list | None = None)
         llm: The ChatOpenAI model instance.
         toolbox_tools: Optional list of tools loaded from the Foundry toolbox MCP.
     """
+    # Provide the LLM to the CRM analytics tool so it can generate SQL
+    init_crm_tools(llm)
+
     # Filter out the MCP web_search tool (broken 404) — use our native one instead
     filtered_toolbox = [t for t in (toolbox_tools or []) if t.name != "web_search"]
     all_tools = list(CRM_TOOLS) + [web_search] + filtered_toolbox
