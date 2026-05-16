@@ -136,44 +136,66 @@ class _FabricTokenAuth(httpx.Auth):
 
 async def quickstart():
     """Build the ReAct agent graph with Fabric + toolbox MCP tools."""
-    mcp_servers: dict = {}
+    all_mcp_tools: list = []
+    mcp_clients: list = []
+
+    # Try connecting to each MCP endpoint independently so one failure
+    # doesn't prevent the other tools from loading.
 
     # Fabric Data Agent MCP
     if FABRIC_MCP_ENDPOINT:
         logger.info(f"Connecting to Fabric Data Agent MCP: {FABRIC_MCP_ENDPOINT}")
-        mcp_servers["fabric_data_agent"] = {
-            "url": FABRIC_MCP_ENDPOINT,
-            "transport": "streamable_http",
-            "auth": _FabricTokenAuth(),
-        }
+        try:
+            fabric_client = MultiServerMCPClient(
+                {
+                    "fabric_data_agent": {
+                        "url": FABRIC_MCP_ENDPOINT,
+                        "transport": "streamable_http",
+                        "auth": _FabricTokenAuth(),
+                    }
+                }
+            )
+            fabric_tools = await fabric_client.get_tools()
+            for t in fabric_tools:
+                t.handle_tool_error = True
+            all_mcp_tools.extend(fabric_tools)
+            mcp_clients.append(fabric_client)
+            logger.info(f"Loaded {len(fabric_tools)} Fabric tools: {[t.name for t in fabric_tools]}")
+        except Exception as e:
+            logger.warning(f"Failed to connect to Fabric Data Agent MCP: {e} — continuing without Fabric tools")
 
     # Foundry Toolbox MCP
     if TOOLBOX_ENDPOINT:
         logger.info(f"Connecting to toolbox: {TOOLBOX_ENDPOINT}")
-        extra_headers = {"Foundry-Features": _TOOLBOX_FEATURES} if _TOOLBOX_FEATURES else {}
-        mcp_servers["toolbox"] = {
-            "url": TOOLBOX_ENDPOINT,
-            "transport": "streamable_http",
-            "headers": extra_headers,
-            "auth": _AzureTokenAuth(),
-        }
+        try:
+            extra_headers = {"Foundry-Features": _TOOLBOX_FEATURES} if _TOOLBOX_FEATURES else {}
+            toolbox_client = MultiServerMCPClient(
+                {
+                    "toolbox": {
+                        "url": TOOLBOX_ENDPOINT,
+                        "transport": "streamable_http",
+                        "headers": extra_headers,
+                        "auth": _AzureTokenAuth(),
+                    }
+                }
+            )
+            toolbox_tools = await toolbox_client.get_tools()
+            for t in toolbox_tools:
+                t.handle_tool_error = True
+            all_mcp_tools.extend(toolbox_tools)
+            mcp_clients.append(toolbox_client)
+            logger.info(f"Loaded {len(toolbox_tools)} toolbox tools: {[t.name for t in toolbox_tools]}")
+        except Exception as e:
+            logger.warning(f"Failed to connect to toolbox MCP: {e} — continuing without toolbox tools")
 
-    mcp_client = None
-    all_mcp_tools: list = []
-
-    if mcp_servers:
-        mcp_client = MultiServerMCPClient(mcp_servers)
-        all_mcp_tools = await mcp_client.get_tools()
-        for t in all_mcp_tools:
-            t.handle_tool_error = True
-        tool_names = [t.name for t in all_mcp_tools]
-        logger.info(f"Loaded {len(all_mcp_tools)} tools from MCP endpoints: {tool_names}")
+    if all_mcp_tools:
+        logger.info(f"Total MCP tools loaded: {len(all_mcp_tools)}")
     else:
-        logger.info("No MCP endpoints configured")
+        logger.info("No MCP tools loaded — agent will use web search only")
 
     graph = build_orchestrator_graph(llm, mcp_tools=all_mcp_tools)
-    logger.info("Agent ready (Fabric Data Agent + toolbox tools active)")
-    return graph, mcp_client
+    logger.info("Agent ready")
+    return graph, mcp_clients
 
 
 def _extract_assistant_text(result: dict) -> str:
@@ -237,12 +259,12 @@ server = ResponsesAgentServerHost(
 )
 
 _agent = None
-_mcp_client = None  # prevent MCP session GC
+_mcp_clients = None  # prevent MCP session GC
 _agent_lock = asyncio.Lock()
 
 
 async def _get_agent():
-    global _agent, _mcp_client
+    global _agent, _mcp_clients
     if _agent is not None:
         return _agent
 
@@ -250,7 +272,7 @@ async def _get_agent():
         if _agent is not None:
             return _agent
 
-        _agent, _mcp_client = await quickstart()
+        _agent, _mcp_clients = await quickstart()
         return _agent
 
 
