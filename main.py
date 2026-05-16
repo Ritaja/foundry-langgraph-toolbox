@@ -123,13 +123,14 @@ FABRIC_MCP_ENDPOINT = os.getenv(
 class _FabricTokenAuth(httpx.Auth):
     """httpx Auth that injects a Fabric-scoped bearer token."""
 
-    _fabric_token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(),
-        "https://api.fabric.microsoft.com/.default",
-    )
+    def __init__(self):
+        self._token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(),
+            "https://api.fabric.microsoft.com/.default",
+        )
 
     def auth_flow(self, request):
-        request.headers["Authorization"] = f"Bearer {self._fabric_token_provider()}"
+        request.headers["Authorization"] = f"Bearer {self._token_provider()}"
         yield request
 
 
