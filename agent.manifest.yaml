@@ -1,9 +1,8 @@
 name: toolbox-langgraph
 description: >
-  LangGraph ReAct agent on Microsoft Foundry with Fabric Data Agent integrated
-  as an MCP tool in the Foundry toolbox.  Queries Fabric lakehouses, warehouses,
-  and semantic models through the platform-managed toolbox, augmented with web
-  search and code interpreter capabilities.
+  LangGraph ReAct agent on Microsoft Foundry with Fabric Data Agent connected
+  directly via MCP (app-managed auth) and a Foundry toolbox providing
+  platform-managed web search and code interpreter capabilities.
 metadata:
   tags:
     - AI Agent Hosting
@@ -31,9 +30,5 @@ resources:
   - kind: toolbox
     name: agent-tools
     tools:
-      - type: mcp
-        server_label: fabric_data_agent
-        server_url: "{{FABRIC_MCP_ENDPOINT}}"
-        require_approval: never
       - type: web_search
       - type: code_interpreter
