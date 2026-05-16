@@ -114,7 +114,7 @@ _TOOLBOX_FEATURES = os.getenv("FOUNDRY_AGENT_TOOLBOX_FEATURES", "Toolboxes=V1Pre
 
 FABRIC_MCP_ENDPOINT = os.getenv(
     "FABRIC_MCP_ENDPOINT",
-    "https://api.fabric.microsoft.com/v1/mcp/workspaces/b184fc45-5853-4116-9527-5f5b500d8961/dataagents/9ea0370e-6950-46b3-9736-816677ddd08e/agent",
+    "https://api.fabric.microsoft.com/v1/mcp/workspaces/71308ecc-8e37-44e5-b047-148f1af540f4/dataagents/fbf7af71-7fca-42d2-8982-db4925eddc62/agent",
 )
 
 # ── Agent creation ──────────────────────────────────────────────────────────
