@@ -30,6 +30,23 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
+# ── Langfuse observability (optional) ───────────────────────────────────────
+# Initialise before any LangChain imports so the singleton is available.
+
+_langfuse_enabled = bool(
+    os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")
+)
+
+if _langfuse_enabled:
+    from langfuse import Langfuse, get_client
+    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+
+    Langfuse(
+        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+    )
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage
 from azure.ai.agentserver.responses import (
@@ -64,6 +81,9 @@ def _read_agent_name() -> str:
 AGENT_NAME = _read_agent_name()
 logger = logging.getLogger(AGENT_NAME)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
+
+if _langfuse_enabled:
+    logger.info("Langfuse tracing enabled")
 
 # ── LLM (Chat Completions API via Azure OpenAI endpoint) ────────────────────
 
@@ -267,8 +287,11 @@ async def handle_response(
         lc_messages.append(HumanMessage(content=user_input))
 
         logger.info(f"Invoking agent with {len(lc_messages)} messages")
+        invoke_config: dict = {}
+        if _langfuse_enabled:
+            invoke_config["callbacks"] = [LangfuseCallbackHandler()]
         result = await asyncio.wait_for(
-            agent.ainvoke({"messages": lc_messages}),
+            agent.ainvoke({"messages": lc_messages}, config=invoke_config),
             timeout=240.0,
         )
         logger.info(f"Agent returned {len(result.get('messages', []))} messages")

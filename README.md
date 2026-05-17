@@ -299,6 +299,9 @@ curl -X POST http://localhost:8088/responses \
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | **Yes** | Model deployment name (e.g. `gpt-4o`) |
 | `TOOLBOX_NAME` | **Yes** | Toolbox name (e.g. `agent-tools`) — constructs the MCP endpoint automatically |
 | `TOOLBOX_ENDPOINT` | No | Full toolbox MCP endpoint URL (alternative to `TOOLBOX_NAME`) |
+| `LANGFUSE_PUBLIC_KEY` | No | Langfuse public key — enables tracing when set together with secret key |
+| `LANGFUSE_SECRET_KEY` | No | Langfuse secret key |
+| `LANGFUSE_HOST` | No | Langfuse host URL (defaults to `https://cloud.langfuse.com`) |
 
 ## Project Structure
 
@@ -346,6 +349,25 @@ fabric-data-agent___DataAgent_mydata
 ```
 
 Reference this prefixed name in `SYSTEM_PROMPT.md`.
+
+## Langfuse Observability (Optional)
+
+The agent supports [Langfuse](https://langfuse.com/) for tracing and observability of LLM calls, tool invocations, and agent runs. When enabled, every agent invocation is automatically traced to your Langfuse dashboard — including LLM inputs/outputs, tool calls, latencies, and token usage.
+
+### Enable Langfuse
+
+1. Create a Langfuse account at [cloud.langfuse.com](https://cloud.langfuse.com) (or self-host)
+2. Create a project and copy your **public key** and **secret key**
+3. Set the environment variables:
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+# Optional — defaults to https://cloud.langfuse.com
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+Tracing activates automatically when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set. If they are not set, the agent runs normally without any Langfuse dependency at runtime.
 
 ## Contributing
 

@@ -8,3 +8,4 @@ python-dotenv==1.1.1
 starlette<1.0.0
 aiohttp
 pydantic-core<2.46.0
+langfuse>=3.0.0
