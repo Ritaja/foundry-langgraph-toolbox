@@ -38,14 +38,18 @@ _langfuse_enabled = bool(
 )
 
 if _langfuse_enabled:
-    from langfuse import Langfuse, get_client
-    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+    try:
+        from langfuse import Langfuse, get_client
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
-    Langfuse(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-    )
+        Langfuse(
+            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        )
+    except Exception as _lf_err:
+        logging.getLogger(__name__).warning(f"Langfuse init failed: {_lf_err} — tracing disabled")
+        _langfuse_enabled = False
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, HumanMessage
