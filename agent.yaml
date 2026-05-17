@@ -19,3 +19,9 @@ environment_variables:
     value: ${TOOLBOX_NAME}
   - name: FABRIC_MCP_ENDPOINT
     value: ${FABRIC_MCP_ENDPOINT}
+  - name: FABRIC_WORKSPACE_ID
+    value: ${FABRIC_WORKSPACE_ID}
+  - name: FABRIC_DATASET_ID
+    value: ${FABRIC_DATASET_ID}
+  - name: FABRIC_LAKEHOUSE_ID
+    value: ${FABRIC_LAKEHOUSE_ID}

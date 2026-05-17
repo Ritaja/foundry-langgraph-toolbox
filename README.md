@@ -1,17 +1,17 @@
-# Fabric Data Agent — LangGraph + MCP + Foundry Toolbox
+# Fabric Data Agent — LangGraph + OneLake + Foundry Toolbox
 
 [![LangGraph](https://img.shields.io/badge/LangGraph-00B9FF?style=flat&logo=langchain&logoColor=white)](https://langchain-ai.github.io/langgraph/) [![Microsoft Fabric](https://img.shields.io/badge/Microsoft%20Fabric-0078D4?style=flat&logo=microsoftazure&logoColor=white)](https://www.microsoft.com/microsoft-fabric) [![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-0078D4?style=flat&logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/services/openai/)
 
-A LangGraph ReAct agent deployed on **Microsoft Foundry** that queries data through a **Microsoft Fabric Data Agent** (via MCP) and augments responses with platform-managed tools (web search, code interpreter) from the Foundry toolbox.
+A LangGraph ReAct agent deployed on **Microsoft Foundry** that reads insurance data directly from **Microsoft Fabric OneLake** (delta tables) and augments responses with platform-managed tools (web search, code interpreter) from the Foundry toolbox.
 
 ## Features
 
-- **Fabric Data Agent (MCP)** — queries data in Fabric lakehouses, warehouses, and semantic models through the Fabric Data Agent's MCP-compatible endpoint
+- **OneLake Delta Table Tools** — reads lakehouse delta tables directly via the `deltalake` library and Fabric REST API for schema discovery
+- **Fabric Data Agent (MCP)** — optional connection to Fabric Data Agent for metadata queries
 - **Foundry Toolbox** — platform-managed `web_search` and `code_interpreter` tools via the Foundry toolbox MCP proxy
-- **Hybrid architecture** — Fabric Data Agent connected directly with app-managed auth; toolbox tools managed by the platform
+- **Hybrid architecture** — OneLake data access + Fabric MCP + toolbox tools, each independent
 - **Responses Protocol** — serves requests on port `8088` via `ResponsesAgentServerHost`
 - **Multi-turn conversation** — maintains context across turns with history support
-- **Graceful fallback** — each MCP connection is independent; a failure in one doesn't block the other
 
 ## Architecture
 
@@ -23,17 +23,23 @@ graph TB
 
     subgraph "Foundry Hosted Agent"
         ORCH[Orchestrator — LangGraph ReAct]
-        subgraph "Direct MCP (app-managed auth)"
+        subgraph "OneLake Data Tools"
+            SCHEMA[get_data_schema]
+            QUERY[query_insurance_data]
+            ANALYZE[analyze_insurance_data]
+        end
+        subgraph "Fabric MCP optional"
             FABRIC_MCP[Fabric Data Agent MCP]
         end
-        subgraph "Foundry Toolbox (platform-managed)"
+        subgraph "Foundry Toolbox"
             WEB[Web Search]
             CODE[Code Interpreter]
         end
     end
 
     subgraph "Microsoft Fabric"
-        LAKEHOUSE[(Lakehouse / Warehouse / Semantic Model)]
+        ONELAKE[(OneLake — Delta Tables)]
+        FABRIC_API[Fabric REST API]
     end
 
     subgraph "Azure OpenAI"
@@ -41,18 +47,37 @@ graph TB
     end
 
     API --> ORCH
+    ORCH --> SCHEMA
+    ORCH --> QUERY
+    ORCH --> ANALYZE
     ORCH --> FABRIC_MCP
     ORCH --> WEB
     ORCH --> CODE
-    FABRIC_MCP --> LAKEHOUSE
+    SCHEMA --> FABRIC_API
+    SCHEMA --> ONELAKE
+    QUERY --> ONELAKE
+    ANALYZE --> ONELAKE
+    FABRIC_MCP --> FABRIC_API
     ORCH --> LLM
 
     style ORCH fill:#e1f5fe
-    style FABRIC_MCP fill:#fff3e0
+    style ONELAKE fill:#fff3e0
     style LLM fill:#e8f5e8
     style WEB fill:#f3e5f5
     style CODE fill:#f3e5f5
 ```
+
+## Why OneLake Instead of Power BI / Fabric MCP?
+
+When running as a Foundry hosted agent with managed identity authentication:
+
+| Approach | Metadata Queries | Data Queries | Status |
+|----------|-----------------|--------------|--------|
+| **Fabric Data Agent MCP** | ✅ Works | ❌ Fails (OBO doesn't work with managed identity) | Metadata only |
+| **Power BI executeQueries API** | ✅ Works | ❌ 401 `PowerBINotAuthorizedException` | Doesn't accept managed identity tokens |
+| **OneLake Delta Tables** | ✅ Via Fabric REST API | ✅ Works with storage tokens | **Used by this agent** |
+
+The root cause is that both the Power BI REST API and the Fabric Data Agent's internal OBO (On-Behalf-Of) flow require app-registration service principals or user tokens — they do not accept managed identity tokens for data execution. OneLake's storage API (`https://storage.azure.com/.default`) works correctly with managed identities.
 
 ## Quick Start (Local)
 
@@ -60,7 +85,7 @@ graph TB
 # 1. Copy and fill in the environment file
 cp .env.example .env
 # Edit .env — set FOUNDRY_PROJECT_ENDPOINT, AZURE_AI_MODEL_DEPLOYMENT_NAME,
-# and FABRIC_MCP_ENDPOINT
+# FABRIC_WORKSPACE_ID, and FABRIC_LAKEHOUSE_ID
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -83,6 +108,7 @@ curl -X POST http://localhost:8088/responses \
 - Azure login: `azd auth login`
 - An Azure AI Foundry project in a [supported region](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/hosted-agents) (e.g. `eastus2`)
 - An Azure Container Registry (ACR) with the project's managed identities granted `AcrPull` / `Container Registry Repository Reader`
+- A Fabric workspace with a lakehouse containing delta tables
 
 ### Deploy
 
@@ -92,8 +118,12 @@ azd init -e my-env
 
 # 2. Set required environment variables
 azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-4o" -e my-env
-azd env set FABRIC_MCP_ENDPOINT "https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent" -e my-env
+azd env set FABRIC_WORKSPACE_ID "<your-fabric-workspace-id>" -e my-env
+azd env set FABRIC_LAKEHOUSE_ID "<your-fabric-lakehouse-id>" -e my-env
 azd env set TOOLBOX_NAME "agent-tools" -e my-env
+
+# Optional: Fabric Data Agent MCP for metadata queries
+azd env set FABRIC_MCP_ENDPOINT "https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent" -e my-env
 
 # 3. Provision infrastructure and deploy
 azd up -e my-env
@@ -102,86 +132,45 @@ azd up -e my-env
 azd ai agent invoke --new-session "What data is available?" --timeout 120
 ```
 
-## Adding a Fabric Data Agent
+## Connecting to Fabric OneLake
 
-This section explains how to configure and connect a Microsoft Fabric Data Agent as a tool in the hosted agent.
-
-### Step 1: Get the Fabric Data Agent MCP Endpoint
+### Step 1: Get Workspace and Lakehouse IDs
 
 1. Open [Microsoft Fabric](https://app.fabric.microsoft.com)
-2. Navigate to your workspace → **Data Agent**
-3. Select your Data Agent and open its settings
-4. Copy the **MCP endpoint URL** — it follows this format:
+2. Navigate to your workspace — the **workspace ID** is in the URL:
    ```
-   https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent
+   https://app.fabric.microsoft.com/groups/<workspace-id>/...
+   ```
+3. Open your lakehouse — the **lakehouse ID** is in the URL:
+   ```
+   https://app.fabric.microsoft.com/groups/<workspace-id>/lakehouses/<lakehouse-id>
    ```
 
-### Step 2: Verify the MCP Endpoint Works
+### Step 2: Grant Agent Identities Access to the Fabric Workspace
 
-Test the endpoint locally before deploying:
+After deployment, the hosted agent runs with two managed identities. **Both must be granted access** to the Fabric workspace for OneLake reads and Fabric REST API calls.
 
-```bash
-# Get a token
-TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
-
-# Initialize MCP session
-curl -sS -X POST "<your-fabric-mcp-endpoint>" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
-
-# List available tools
-curl -sS -X POST "<your-fabric-mcp-endpoint>" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-```
-
-You should see a response like:
-```json
-{"result":{"tools":[{"name":"DataAgent_insurance360","description":"","inputSchema":{"type":"object","properties":{"userQuestion":{"type":"string"}},"required":["userQuestion"]}}]}}
-```
-
-### Step 3: Set the Environment Variable
+#### 2a. Get the Agent Identity Principal IDs
 
 ```bash
-azd env set FABRIC_MCP_ENDPOINT "https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent"
-```
-
-### Step 4: Deploy the Agent
-
-```bash
-azd deploy <agent-name> --no-prompt
-```
-
-### Step 5: Grant Fabric Workspace Access to Agent Identities (Critical)
-
-After deployment, the hosted agent runs with two managed identities. **Both must be granted access to the Fabric workspace**, otherwise the Fabric MCP endpoint returns `401 Unauthorized` (`TokenIsMissing`).
-
-#### 5a. Get the Agent Identity Principal IDs
-
-```bash
-# Get agent details — look for instance_identity and blueprint
 az rest --method GET \
-  --url "<project-endpoint>/hosted-agents/<agent-name>?api-version=2025-05-15-preview" \
+  --url "<project-endpoint>/agents/<agent-name>?api-version=2025-05-15-preview" \
   --resource "https://ai.azure.com"
 ```
 
 From the response, note two principal IDs:
 - **Instance identity** `principal_id` — the per-agent managed identity
-- **Blueprint** `principal_id` — the shared infrastructure identity
+- **Blueprint identity** `principal_id` — the shared infrastructure identity
 
-#### 5b. Add Both Identities as Contributors in the Fabric Workspace
+#### 2b. Add Both Identities to the Fabric Workspace
 
-You can do this via the [Fabric portal](https://app.fabric.microsoft.com) or the Fabric REST API:
-
-**Option A — Fabric Portal:**
+**Via Fabric Portal:**
 1. Open your Fabric workspace → **Manage access**
 2. Click **Add people or groups**
 3. Search for each principal ID (they appear as service principals)
-4. Grant **Contributor** role to both
+4. Grant **Contributor** role (or higher) to both
 
-**Option B — Fabric REST API:**
+**Via Fabric REST API:**
 
 ```bash
 TOKEN=$(az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv)
@@ -200,29 +189,38 @@ curl -X POST "https://api.fabric.microsoft.com/v1/workspaces/$WORKSPACE_ID/roleA
   -d '{"principal":{"id":"<blueprint-principal-id>","type":"ServicePrincipal"},"role":"Contributor"}'
 ```
 
-Both calls should return `201 Created`.
+#### 2c. Enable OneLake for Third-Party Access
 
-#### 5c. Verify Access
+In the Fabric Admin Portal, ensure **OneLake settings > Users can access data stored in OneLake with apps external to the Fabric environment** is enabled.
 
-Invoke the agent — it should now connect to Fabric and load tools:
+### Step 3: Verify Connectivity
 
 ```bash
 azd ai agent invoke --new-session "What data tables are available?" --timeout 120
 ```
 
-In the agent logs you should see:
-```
-Loaded 1 Fabric tools: ['DataAgent_insurance360']
-```
+You should see the agent list all lakehouse tables with their schemas.
 
 ### Why Two Identities?
 
 | Identity | Purpose | Why It Needs Fabric Access |
 |----------|---------|---------------------------|
-| **Instance identity** | Per-agent identity used at runtime to call external services | Used by `DefaultAzureCredential` in the container to get Fabric tokens |
-| **Blueprint identity** | Shared infrastructure identity for the agent platform | Used by the platform for container lifecycle and service mesh operations |
+| **Instance identity** | Per-agent identity used at runtime | Used by `DefaultAzureCredential` to get storage and Fabric API tokens |
+| **Blueprint identity** | Shared infrastructure identity | Used by the platform for container lifecycle and service mesh operations |
 
-> **Note:** The Foundry toolbox MCP proxy does not yet support `managed_identity` auth for external MCP servers. That's why this agent connects to Fabric **directly** with app-managed `_FabricTokenAuth` rather than routing through the toolbox. The toolbox handles `web_search` and `code_interpreter` only.
+## Adding a Fabric Data Agent (Optional — Metadata Only)
+
+The Fabric Data Agent MCP can optionally be connected for metadata queries (e.g., listing available tables). **It cannot execute data queries with managed identity tokens** — the agent uses OneLake delta table tools for all data access.
+
+1. Open [Microsoft Fabric](https://app.fabric.microsoft.com) → your workspace → **Data Agent**
+2. Copy the MCP endpoint URL:
+   ```
+   https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspace-id>/dataagents/<dataagent-id>/agent
+   ```
+3. Set the environment variable:
+   ```bash
+   azd env set FABRIC_MCP_ENDPOINT "<your-fabric-mcp-endpoint>"
+   ```
 
 ## Environment Variables
 
@@ -230,15 +228,18 @@ Loaded 1 Fabric tools: ['DataAgent_insurance360']
 |----------|----------|-------------|
 | `FOUNDRY_PROJECT_ENDPOINT` | **Yes** | Foundry project endpoint — platform-injected at runtime |
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | **Yes** | Model deployment name (e.g. `gpt-4o`) |
-| `FABRIC_MCP_ENDPOINT` | **Yes** | Fabric Data Agent MCP endpoint URL |
+| `FABRIC_WORKSPACE_ID` | **Yes** | Fabric workspace ID for OneLake access |
+| `FABRIC_LAKEHOUSE_ID` | **Yes** | Fabric lakehouse ID containing delta tables |
+| `FABRIC_MCP_ENDPOINT` | No | Fabric Data Agent MCP endpoint URL (metadata only) |
+| `FABRIC_DATASET_ID` | No | Fabric semantic model ID (for Power BI integration) |
 | `TOOLBOX_NAME` | No | Toolbox name — constructs the MCP endpoint automatically |
 | `TOOLBOX_ENDPOINT` | No | Full toolbox MCP endpoint URL (alternative to `TOOLBOX_NAME`) |
 
 ## Project Structure
 
 ```
-├── main.py                      # Agent entry point, MCP connections, Responses Protocol server
-├── orchestrator.py              # LangGraph ReAct agent builder (MCP + web search tools)
+├── main.py                      # Agent entry point, OneLake tools, MCP connections, Responses server
+├── orchestrator.py              # LangGraph ReAct agent builder
 ├── tools/
 │   └── web_search.py            # Bing web search via Azure OpenAI Responses API
 ├── SYSTEM_PROMPT.md             # Agent system prompt
@@ -249,22 +250,28 @@ Loaded 1 Fabric tools: ['DataAgent_insurance360']
 └── azure.yaml                   # azd deployment configuration
 ```
 
+## OneLake Data Tools
+
+The agent provides three built-in tools for querying Fabric lakehouse data:
+
+| Tool | Description |
+|------|-------------|
+| `get_data_schema` | Lists all tables and their column schemas using Fabric REST API + delta table introspection |
+| `query_insurance_data` | Reads a specific table with optional column selection and row limits |
+| `analyze_insurance_data` | Loads multiple related tables for cross-table analysis (e.g. comparing ratios across product types) |
+
+These tools authenticate via `DefaultAzureCredential` and read delta tables using `abfss://` paths through OneLake's DFS endpoint.
+
 ## Toolbox Configuration
 
-The Foundry toolbox is configured in `agent.manifest.yaml`. It declares two platform-managed tools in the `agent-tools` toolbox:
+The Foundry toolbox is configured in `agent.manifest.yaml`:
 
 | Tool | Type | Source |
 |------|------|--------|
 | Web Search | `web_search` | Platform-managed (Bing) |
 | Code Interpreter | `code_interpreter` | Platform-managed (sandboxed Python) |
 
-These tools are served via the toolbox MCP proxy at `{project_endpoint}/toolboxes/agent-tools/mcp?api-version=v1`. The agent connects to this endpoint with an Azure AD token scoped to `https://ai.azure.com/.default`.
-
-> The Fabric Data Agent is **not** in the toolbox — it's connected directly from app code because the toolbox MCP proxy doesn't yet forward managed identity tokens to external MCP servers.
-
 ## Sample Queries
-
-Once deployed with Fabric access configured, try these queries:
 
 ```
 "What data tables are available?"
