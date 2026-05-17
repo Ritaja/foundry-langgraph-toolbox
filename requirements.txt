@@ -8,3 +8,5 @@ python-dotenv==1.1.1
 starlette<1.0.0
 aiohttp
 pydantic-core<2.46.0
+duckdb>=0.9.0
+faker>=22.0.0
