@@ -10,18 +10,10 @@ protocols:
   - protocol: responses
     version: 1.0.0
 resources:
-  cpu: "0.25"
-  memory: 0.5Gi
+  cpu: "1"
+  memory: 2Gi
 environment_variables:
   - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
     value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
   - name: TOOLBOX_NAME
     value: ${TOOLBOX_NAME}
-  - name: FABRIC_MCP_ENDPOINT
-    value: ${FABRIC_MCP_ENDPOINT}
-  - name: FABRIC_WORKSPACE_ID
-    value: ${FABRIC_WORKSPACE_ID}
-  - name: FABRIC_DATASET_ID
-    value: ${FABRIC_DATASET_ID}
-  - name: FABRIC_LAKEHOUSE_ID
-    value: ${FABRIC_LAKEHOUSE_ID}

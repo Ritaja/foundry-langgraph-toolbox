@@ -1,12 +1,9 @@
-"""LangGraph agent on Azure AI Foundry with Fabric Data Agent MCP.
+"""LangGraph agent on Azure AI Foundry with Foundry Toolbox.
 
-A ReAct agent that connects to a Microsoft Fabric Data Agent directly via
-its MCP endpoint (with app-managed auth), and to the Foundry toolbox for
-platform-managed tools (web search, code interpreter).
-
-When the Fabric Data Agent cannot execute data queries (e.g. managed-identity
-callers hit OBO limitations), a direct DAX query fallback tool is available
-that calls the Power BI REST API with the agent's own token.
+A ReAct agent that connects to the Foundry toolbox for all tools:
+- Fabric Data Agent (via MCP, agent-identity auth managed by platform)
+- Web Search (platform-managed)
+- Code Interpreter (platform-managed)
 
 ## Platform-Injected Environment Variables (container-image-spec)
 
@@ -18,10 +15,7 @@ The Foundry platform injects these at runtime:
 ## User-Defined Variables
 
 - `AZURE_AI_MODEL_DEPLOYMENT_NAME` — chat model deployment name
-- `FABRIC_MCP_ENDPOINT` — Fabric Data Agent MCP endpoint URL
 - `TOOLBOX_ENDPOINT` — full toolbox MCP endpoint URL (optional override)
-- `FABRIC_WORKSPACE_ID` — Fabric workspace ID for direct DAX queries
-- `FABRIC_DATASET_ID` — Semantic model (dataset) ID for direct DAX queries
 """
 
 import asyncio
@@ -117,257 +111,15 @@ TOOLBOX_ENDPOINT = (
 )
 _TOOLBOX_FEATURES = os.getenv("FOUNDRY_AGENT_TOOLBOX_FEATURES", "Toolboxes=V1Preview")
 
-# ── Fabric Data Agent MCP endpoint ──────────────────────────────────────────
-
-FABRIC_MCP_ENDPOINT = os.getenv(
-    "FABRIC_MCP_ENDPOINT",
-    "https://api.fabric.microsoft.com/v1/mcp/workspaces/71308ecc-8e37-44e5-b047-148f1af540f4/dataagents/fbf7af71-7fca-42d2-8982-db4925eddc62/agent",
-)
-
-# Direct DAX query settings (fallback when Fabric Data Agent can't execute data queries)
-FABRIC_WORKSPACE_ID = os.getenv(
-    "FABRIC_WORKSPACE_ID",
-    "71308ecc-8e37-44e5-b047-148f1af540f4",
-)
-FABRIC_DATASET_ID = os.getenv(
-    "FABRIC_DATASET_ID",
-    "37947b9f-4de7-4ae0-9f32-c812efc55564",
-)
-FABRIC_LAKEHOUSE_ID = os.getenv(
-    "FABRIC_LAKEHOUSE_ID",
-    "c2bf5944-c092-4541-a6d7-4a3838a39fbc",
-)
-
 # ── Agent creation ──────────────────────────────────────────────────────────
 
 
-class _FabricTokenAuth(httpx.Auth):
-    """httpx Auth that injects a Fabric-scoped bearer token."""
-
-    def __init__(self):
-        self._credential = DefaultAzureCredential()
-        self._token_provider = get_bearer_token_provider(
-            self._credential,
-            "https://api.fabric.microsoft.com/.default",
-        )
-
-    def auth_flow(self, request):
-        token = self._token_provider()
-        request.headers["Authorization"] = f"Bearer {token}"
-        yield request
-
-
-
-# ── Direct Data Query Tools (reads delta tables from OneLake) ────────────────
-
-def _build_data_tools() -> list:
-    """Build LangChain tools that read data directly from OneLake delta tables.
-
-    The Power BI executeQueries API doesn't support managed identity tokens,
-    and the Fabric Data Agent's internal OBO flow also fails with managed
-    identities. These tools bypass both by reading delta/parquet files
-    directly from OneLake using a storage-scoped token.
-    """
-    from langchain_core.tools import tool as lc_tool
-
-    _storage_credential = DefaultAzureCredential()
-    _onelake_base = (
-        f"abfss://{FABRIC_WORKSPACE_ID}@onelake.dfs.fabric.microsoft.com"
-        f"/{FABRIC_LAKEHOUSE_ID}/Tables"
-    )
-
-    def _read_delta_table(table_name: str) -> "pandas.DataFrame":
-        """Read a delta table from OneLake and return as a pandas DataFrame."""
-        import deltalake
-        import pandas
-
-        table_path = f"{_onelake_base}/{table_name}"
-        storage_options = {
-            "azure_storage_account_name": "onelake",
-            "azure_use_fabric_endpoint": "true",
-        }
-        try:
-            dt = deltalake.DeltaTable(
-                table_path,
-                storage_options=storage_options,
-            )
-            return dt.to_pandas()
-        except Exception:
-            # Fallback: try with explicit token
-            token = _storage_credential.get_token("https://storage.azure.com/.default")
-            storage_options["azure_storage_token"] = token.token
-            dt = deltalake.DeltaTable(
-                table_path,
-                storage_options=storage_options,
-            )
-            return dt.to_pandas()
-
-    @lc_tool
-    def get_data_schema() -> str:
-        """Get the schema of all tables in the InsuranceGold lakehouse.
-        Call this FIRST before querying any data so you know the exact table
-        and column names. Returns table names and their columns with data types."""
-        import httpx as _httpx
-
-        fabric_tp = get_bearer_token_provider(_storage_credential, "https://api.fabric.microsoft.com/.default")
-        url = f"https://api.fabric.microsoft.com/v1/workspaces/{FABRIC_WORKSPACE_ID}/lakehouses/{FABRIC_LAKEHOUSE_ID}/tables"
-        try:
-            resp = _httpx.get(url, headers={"Authorization": f"Bearer {fabric_tp()}"}, timeout=30)
-            resp.raise_for_status()
-            tables_data = resp.json().get("data", [])
-            if not tables_data:
-                return "No tables found in the lakehouse."
-
-            lines = ["# InsuranceGold Lakehouse Tables\n"]
-            for tbl in tables_data:
-                tname = tbl.get("name", "unknown")
-                lines.append(f"## Table: '{tname}'")
-                # Read schema from delta table
-                try:
-                    df = _read_delta_table(tname)
-                    for col in df.columns:
-                        dtype = str(df[col].dtype)
-                        lines.append(f"  - {col} ({dtype})")
-                    lines.append(f"  ({len(df)} rows)")
-                except Exception as e:
-                    lines.append(f"  (schema unavailable: {e})")
-                lines.append("")
-            return "\n".join(lines)
-        except Exception as e:
-            return f"Schema query failed: {type(e).__name__}: {e}"
-
-    @lc_tool
-    def query_insurance_data(table_name: str, filter_column: str = "", filter_value: str = "", columns: str = "", limit: int = 50) -> str:
-        """Query data from a specific table in the InsuranceGold lakehouse.
-        Call get_data_schema first to learn table and column names.
-
-        Args:
-            table_name: Name of the table to query (e.g. 'insurance_product_type')
-            filter_column: Optional column name to filter on
-            filter_value: Value to filter for (exact match)
-            columns: Comma-separated column names to return (empty = all columns)
-            limit: Maximum rows to return (default 50)
-        """
-        try:
-            df = _read_delta_table(table_name)
-
-            if columns:
-                col_list = [c.strip() for c in columns.split(",")]
-                valid_cols = [c for c in col_list if c in df.columns]
-                if valid_cols:
-                    df = df[valid_cols]
-
-            if filter_column and filter_value and filter_column in df.columns:
-                df = df[df[filter_column].astype(str) == str(filter_value)]
-
-            df = df.head(limit)
-
-            if df.empty:
-                return f"No data found in '{table_name}' with the given filters."
-
-            return df.to_markdown(index=False)
-        except Exception as e:
-            return f"Query failed: {type(e).__name__}: {e}"
-
-    @lc_tool
-    def analyze_insurance_data(question: str) -> str:
-        """Analyze insurance data by loading relevant tables and computing results.
-        Use this for complex analytical questions like comparing ratios, aggregating
-        data across tables, or computing statistics. Describe your question in
-        natural language.
-
-        Args:
-            question: Natural language question about the insurance data
-        """
-        import pandas as pd
-
-        try:
-            # Load all tables into a dict for analysis
-            import httpx as _httpx
-
-            fabric_tp = get_bearer_token_provider(_storage_credential, "https://api.fabric.microsoft.com/.default")
-            url = f"https://api.fabric.microsoft.com/v1/workspaces/{FABRIC_WORKSPACE_ID}/lakehouses/{FABRIC_LAKEHOUSE_ID}/tables"
-            resp = _httpx.get(url, headers={"Authorization": f"Bearer {fabric_tp()}"}, timeout=30)
-            resp.raise_for_status()
-            table_names = [t["name"] for t in resp.json().get("data", [])]
-
-            tables: dict[str, pd.DataFrame] = {}
-            for tname in table_names:
-                try:
-                    tables[tname] = _read_delta_table(tname)
-                except Exception as e:
-                    logger.warning(f"Could not load table {tname}: {e}")
-
-            # Build a summary for the LLM to use
-            result_parts = [f"Loaded {len(tables)} tables: {list(tables.keys())}\n"]
-
-            # For questions about product types, loss/expense ratios
-            if "insurance_product_type" in tables:
-                ipt = tables["insurance_product_type"]
-                result_parts.append(f"## insurance_product_type ({len(ipt)} rows)")
-                result_parts.append(ipt.to_markdown(index=False))
-                result_parts.append("")
-
-            # For questions about claims
-            if "claims" in tables and ("claim" in question.lower() or "loss" in question.lower()):
-                claims = tables["claims"]
-                result_parts.append(f"## claims ({len(claims)} rows, showing first 20)")
-                result_parts.append(claims.head(20).to_markdown(index=False))
-                result_parts.append("")
-
-            # For questions about agents/sales
-            if "agent_sales" in tables and ("agent" in question.lower() or "sale" in question.lower()):
-                sales = tables["agent_sales"]
-                result_parts.append(f"## agent_sales ({len(sales)} rows, showing first 20)")
-                result_parts.append(sales.head(20).to_markdown(index=False))
-                result_parts.append("")
-
-            # For questions about commissions
-            if "agent_commission" in tables and "commission" in question.lower():
-                comm = tables["agent_commission"]
-                result_parts.append(f"## agent_commission ({len(comm)} rows, showing first 20)")
-                result_parts.append(comm.head(20).to_markdown(index=False))
-                result_parts.append("")
-
-            return "\n".join(result_parts)
-        except Exception as e:
-            return f"Analysis failed: {type(e).__name__}: {e}"
-
-    return [get_data_schema, query_insurance_data, analyze_insurance_data]
-
-
 async def quickstart():
-    """Build the ReAct agent graph with Fabric MCP + toolbox MCP + OneLake tools."""
+    """Build the ReAct agent graph with toolbox MCP tools."""
     all_mcp_tools: list = []
     mcp_clients: list = []
 
-    # Connect to each MCP endpoint independently so one failure
-    # doesn't prevent the other tools from loading.
-
-    # Fabric Data Agent MCP (direct connection with app-managed auth)
-    if FABRIC_MCP_ENDPOINT:
-        logger.info(f"Connecting to Fabric Data Agent MCP: {FABRIC_MCP_ENDPOINT}")
-        try:
-            fabric_auth = _FabricTokenAuth()
-            fabric_client = MultiServerMCPClient(
-                {
-                    "fabric_data_agent": {
-                        "url": FABRIC_MCP_ENDPOINT,
-                        "transport": "streamable_http",
-                        "auth": fabric_auth,
-                    }
-                }
-            )
-            fabric_tools = await fabric_client.get_tools()
-            for t in fabric_tools:
-                t.handle_tool_error = True
-            all_mcp_tools.extend(fabric_tools)
-            mcp_clients.append(fabric_client)
-            logger.info(f"Loaded {len(fabric_tools)} Fabric tools: {[t.name for t in fabric_tools]}")
-        except Exception as e:
-            logger.warning(f"Failed to connect to Fabric Data Agent MCP: {e}")
-
-    # Foundry Toolbox MCP (platform-managed: web search, code interpreter)
+    # Foundry Toolbox MCP (Fabric Data Agent + web search + code interpreter)
     if TOOLBOX_ENDPOINT:
         logger.info(f"Connecting to toolbox: {TOOLBOX_ENDPOINT}")
         try:
@@ -392,20 +144,9 @@ async def quickstart():
             logger.warning(f"Failed to connect to toolbox MCP: {e} — continuing without toolbox tools")
 
     if all_mcp_tools:
-        logger.info(f"Total MCP tools loaded: {len(all_mcp_tools)}")
+        logger.info(f"Total tools loaded: {len(all_mcp_tools)}")
     else:
-        logger.warning("No MCP tools loaded — agent will operate without MCP tools")
-
-    # Always add direct OneLake data query tools as reliable data access path.
-    # The Power BI executeQueries API doesn't accept managed identity tokens,
-    # and the Fabric Data Agent MCP fails with OBO for managed identities.
-    # These tools read delta tables directly from OneLake via storage API.
-    try:
-        data_tools = _build_data_tools()
-        all_mcp_tools.extend(data_tools)
-        logger.info(f"Added {len(data_tools)} data query tools: {[t.name for t in data_tools]}")
-    except Exception as e:
-        logger.warning(f"Failed to build data query tools: {e}")
+        logger.warning("No tools loaded — agent will operate without tools")
 
     graph = build_orchestrator_graph(llm, mcp_tools=all_mcp_tools)
     logger.info("Agent ready")
@@ -525,10 +266,12 @@ async def handle_response(
         lc_messages = _history_to_langchain_messages(history)
         lc_messages.append(HumanMessage(content=user_input))
 
+        logger.info(f"Invoking agent with {len(lc_messages)} messages")
         result = await asyncio.wait_for(
             agent.ainvoke({"messages": lc_messages}),
             timeout=240.0,
         )
+        logger.info(f"Agent returned {len(result.get('messages', []))} messages")
         assistant_reply = _extract_assistant_text(result)
         if not assistant_reply:
             assistant_reply = "(Agent completed without text response)"
@@ -536,6 +279,9 @@ async def handle_response(
         assistant_reply = "I could not complete this request within the local timeout. Please retry with a simpler prompt."
     except asyncio.CancelledError:
         assistant_reply = "The request was cancelled before completion. Please retry."
+    except Exception as e:
+        logger.exception(f"Agent invocation failed: {e}")
+        assistant_reply = f"An error occurred: {e}"
 
     message_item = stream.add_output_item_message()
     yield message_item.emit_added()
