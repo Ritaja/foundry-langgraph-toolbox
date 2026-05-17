@@ -28,8 +28,8 @@ async def web_search(query: str) -> str:
     """Search the web for current information using Bing.
 
     Use this tool whenever the user asks for external, real-time, or factual
-    information that is not available in the CRM data — for example, insurance
-    product terms and conditions, carrier websites, regulatory updates, weather
+    information that is not available in the Fabric data — for example,
+    documentation, product announcements, regulatory updates, weather
     events, or news.
 
     Args:

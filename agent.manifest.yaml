@@ -1,13 +1,13 @@
 name: toolbox-langgraph
 description: >
-  LangGraph ReAct agent wired to an toolbox MCP endpoint in Microsoft Foundry.
-  Connects to a hosted toolbox via MCP and exposes its tools through a
-  LangGraph ReAct loop with Azure OpenAI.
+  LangGraph ReAct agent on Microsoft Foundry with Fabric Data Agent connected
+  directly via MCP (app-managed auth) and a Foundry toolbox providing
+  platform-managed web search and code interpreter capabilities.
 metadata:
   tags:
     - AI Agent Hosting
     - LangGraph
-    - Toolbox
+    - Fabric Data Agent
     - MCP
     - Microsoft Foundry
 template:
@@ -21,6 +21,8 @@ template:
       value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
     - name: TOOLBOX_NAME
       value: "agent-tools"
+    - name: FABRIC_MCP_ENDPOINT
+      value: "{{FABRIC_MCP_ENDPOINT}}"
 resources:
   - kind: model
     id: gpt-5.4-mini
@@ -30,4 +32,3 @@ resources:
     tools:
       - type: web_search
       - type: code_interpreter
-      - type: azure_ai_search

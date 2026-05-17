@@ -417,6 +417,6 @@ FodyWeavers.xsd
 *.msm
 *.msp
 .azure
-# DuckDB database files (generated at build/runtime)
+# DuckDB database files
 *.db
 *.db.wal
