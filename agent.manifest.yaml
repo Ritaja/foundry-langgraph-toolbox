@@ -1,8 +1,10 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/AgentManifest.yaml
 name: toolbox-langgraph
+displayName: "LangGraph + Fabric Data Agent Toolbox"
 description: >
-  LangGraph ReAct agent on Microsoft Foundry with Fabric Data Agent connected
-  directly via MCP (app-managed auth) and a Foundry toolbox providing
-  platform-managed web search and code interpreter capabilities.
+  LangGraph ReAct agent on Microsoft Foundry with a Fabric Data Agent
+  connected via MCP through the Foundry toolbox (agent identity auth),
+  plus platform-managed web search and code interpreter.
 metadata:
   tags:
     - AI Agent Hosting
@@ -21,14 +23,15 @@ template:
       value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
     - name: TOOLBOX_NAME
       value: "agent-tools"
-    - name: FABRIC_MCP_ENDPOINT
-      value: "{{FABRIC_MCP_ENDPOINT}}"
 resources:
   - kind: model
-    id: gpt-5.4-mini
+    id: gpt-4o
     name: AZURE_AI_MODEL_DEPLOYMENT_NAME
   - kind: toolbox
     name: agent-tools
     tools:
       - type: web_search
       - type: code_interpreter
+      - type: mcp
+        server_label: fabric-data-agent
+        project_connection_id: fabric-data-agent-conn

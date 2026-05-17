@@ -1,8 +1,9 @@
-"""LangGraph agent on Azure AI Foundry with Fabric Data Agent MCP.
+"""LangGraph agent on Azure AI Foundry with Foundry Toolbox.
 
-A ReAct agent that connects to a Microsoft Fabric Data Agent directly via
-its MCP endpoint (with app-managed auth), and to the Foundry toolbox for
-platform-managed tools (web search, code interpreter).
+A ReAct agent that connects to the Foundry toolbox for all tools:
+- Fabric Data Agent (via MCP, agent-identity auth managed by platform)
+- Web Search (platform-managed)
+- Code Interpreter (platform-managed)
 
 ## Platform-Injected Environment Variables (container-image-spec)
 
@@ -14,11 +15,11 @@ The Foundry platform injects these at runtime:
 ## User-Defined Variables
 
 - `AZURE_AI_MODEL_DEPLOYMENT_NAME` — chat model deployment name
-- `FABRIC_MCP_ENDPOINT` — Fabric Data Agent MCP endpoint URL
 - `TOOLBOX_ENDPOINT` — full toolbox MCP endpoint URL (optional override)
 """
 
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -62,6 +63,7 @@ def _read_agent_name() -> str:
 
 AGENT_NAME = _read_agent_name()
 logger = logging.getLogger(AGENT_NAME)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 
 # ── LLM (Chat Completions API via Azure OpenAI endpoint) ────────────────────
 
@@ -109,61 +111,15 @@ TOOLBOX_ENDPOINT = (
 )
 _TOOLBOX_FEATURES = os.getenv("FOUNDRY_AGENT_TOOLBOX_FEATURES", "Toolboxes=V1Preview")
 
-# ── Fabric Data Agent MCP endpoint ──────────────────────────────────────────
-
-FABRIC_MCP_ENDPOINT = os.getenv(
-    "FABRIC_MCP_ENDPOINT",
-    "https://api.fabric.microsoft.com/v1/mcp/workspaces/71308ecc-8e37-44e5-b047-148f1af540f4/dataagents/fbf7af71-7fca-42d2-8982-db4925eddc62/agent",
-)
-
 # ── Agent creation ──────────────────────────────────────────────────────────
 
 
-class _FabricTokenAuth(httpx.Auth):
-    """httpx Auth that injects a Fabric-scoped bearer token."""
-
-    def __init__(self):
-        self._token_provider = get_bearer_token_provider(
-            DefaultAzureCredential(),
-            "https://api.fabric.microsoft.com/.default",
-        )
-
-    def auth_flow(self, request):
-        request.headers["Authorization"] = f"Bearer {self._token_provider()}"
-        yield request
-
-
 async def quickstart():
-    """Build the ReAct agent graph with Fabric MCP + toolbox MCP tools."""
+    """Build the ReAct agent graph with toolbox MCP tools."""
     all_mcp_tools: list = []
     mcp_clients: list = []
 
-    # Connect to each MCP endpoint independently so one failure
-    # doesn't prevent the other tools from loading.
-
-    # Fabric Data Agent MCP (direct connection with app-managed auth)
-    if FABRIC_MCP_ENDPOINT:
-        logger.info(f"Connecting to Fabric Data Agent MCP: {FABRIC_MCP_ENDPOINT}")
-        try:
-            fabric_client = MultiServerMCPClient(
-                {
-                    "fabric_data_agent": {
-                        "url": FABRIC_MCP_ENDPOINT,
-                        "transport": "streamable_http",
-                        "auth": _FabricTokenAuth(),
-                    }
-                }
-            )
-            fabric_tools = await fabric_client.get_tools()
-            for t in fabric_tools:
-                t.handle_tool_error = True
-            all_mcp_tools.extend(fabric_tools)
-            mcp_clients.append(fabric_client)
-            logger.info(f"Loaded {len(fabric_tools)} Fabric tools: {[t.name for t in fabric_tools]}")
-        except Exception as e:
-            logger.warning(f"Failed to connect to Fabric Data Agent MCP: {e} — continuing without Fabric tools")
-
-    # Foundry Toolbox MCP (platform-managed: web search, code interpreter)
+    # Foundry Toolbox MCP (Fabric Data Agent + web search + code interpreter)
     if TOOLBOX_ENDPOINT:
         logger.info(f"Connecting to toolbox: {TOOLBOX_ENDPOINT}")
         try:
@@ -188,9 +144,9 @@ async def quickstart():
             logger.warning(f"Failed to connect to toolbox MCP: {e} — continuing without toolbox tools")
 
     if all_mcp_tools:
-        logger.info(f"Total MCP tools loaded: {len(all_mcp_tools)}")
+        logger.info(f"Total tools loaded: {len(all_mcp_tools)}")
     else:
-        logger.warning("No MCP tools loaded — agent will operate without tools")
+        logger.warning("No tools loaded — agent will operate without tools")
 
     graph = build_orchestrator_graph(llm, mcp_tools=all_mcp_tools)
     logger.info("Agent ready")
@@ -310,10 +266,12 @@ async def handle_response(
         lc_messages = _history_to_langchain_messages(history)
         lc_messages.append(HumanMessage(content=user_input))
 
+        logger.info(f"Invoking agent with {len(lc_messages)} messages")
         result = await asyncio.wait_for(
             agent.ainvoke({"messages": lc_messages}),
             timeout=240.0,
         )
+        logger.info(f"Agent returned {len(result.get('messages', []))} messages")
         assistant_reply = _extract_assistant_text(result)
         if not assistant_reply:
             assistant_reply = "(Agent completed without text response)"
@@ -321,6 +279,9 @@ async def handle_response(
         assistant_reply = "I could not complete this request within the local timeout. Please retry with a simpler prompt."
     except asyncio.CancelledError:
         assistant_reply = "The request was cancelled before completion. Please retry."
+    except Exception as e:
+        logger.exception(f"Agent invocation failed: {e}")
+        assistant_reply = f"An error occurred: {e}"
 
     message_item = stream.add_output_item_message()
     yield message_item.emit_added()
