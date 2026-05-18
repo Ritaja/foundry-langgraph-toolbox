@@ -45,7 +45,8 @@ if _langfuse_enabled:
         Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            base_url=os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            debug=True,
         )
     except Exception as _lf_err:
         logging.getLogger(__name__).warning(f"Langfuse init failed: {_lf_err} — tracing disabled")
@@ -309,6 +310,12 @@ async def handle_response(
     except Exception as e:
         logger.exception(f"Agent invocation failed: {e}")
         assistant_reply = f"An error occurred: {e}"
+    finally:
+        if _langfuse_enabled:
+            try:
+                get_client().flush()
+            except Exception:
+                pass
 
     message_item = stream.add_output_item_message()
     yield message_item.emit_added()

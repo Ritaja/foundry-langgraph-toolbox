@@ -25,3 +25,5 @@ environment_variables:
     value: ${LANGFUSE_SECRET_KEY}
   - name: LANGFUSE_HOST
     value: ${LANGFUSE_HOST}
+  - name: LANGFUSE_BASE_URL
+    value: ${LANGFUSE_HOST}
