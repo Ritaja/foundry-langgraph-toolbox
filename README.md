@@ -6,6 +6,31 @@ A **template** for building LangGraph ReAct agents on **Microsoft Foundry** that
 
 > **Included example:** This repo ships pre-configured with an **InsuranceGold** Fabric Data Agent (`DataAgent_insurance360`) that exposes insurance tables (agents, claims, sales, commissions, products). Replace it with your own Data Agent by following the [Bring Your Own Data Agent](#bring-your-own-data-agent) guide below.
 
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [How It Works](#how-it-works)
+- [Included Example: InsuranceGold](#included-example-insurancegold)
+- [Bring Your Own Data Agent](#bring-your-own-data-agent)
+- [Deploy as a Hosted Agent](#deploy-as-a-hosted-agent)
+  - [Option A: Deploy to a New AI Foundry Project](#option-a-deploy-to-a-new-ai-foundry-project)
+  - [Option B: Deploy to an Existing AI Foundry Project](#option-b-deploy-to-an-existing-ai-foundry-project)
+  - [Configuration Files Reference](#configuration-files-reference)
+  - [azd Environment Variables Reference](#azd-environment-variables-reference)
+- [Quick Start (Local)](#quick-start-local)
+- [Environment Variables](#environment-variables)
+- [Project Structure](#project-structure)
+- [Toolbox Configuration](#toolbox-configuration)
+- [Key Technical Notes](#key-technical-notes)
+- [Langfuse Observability (Optional)](#langfuse-observability-optional)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
 ## Features
 
 - **Any Fabric Data Agent via Toolbox** — connect any Fabric Data Agent as an MCP tool through the Foundry toolbox; the agent code itself is data-agnostic
@@ -251,26 +276,244 @@ You should see your Data Agent's actual table names in the response.
 - Azure Developer CLI (`azd`) — [install docs](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - AI Agents extension: `azd extension install azure.ai.agents`
 - Azure login: `azd auth login`
-- An Azure AI Foundry project in a [supported region](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/hosted-agents) (e.g. `eastus2`)
-- An Azure Container Registry (ACR) with the project's managed identities granted `AcrPull`
+- An Azure AI Foundry project in a [supported region](https://learn.microsoft.com/azure/ai-foundry/agents/concepts/hosted-agents) (e.g. `eastus`, `eastus2`, `swedencentral`)
+- An Azure Container Registry (ACR) connected to the project with `AcrPull` granted to project managed identities
 - A Fabric Data Agent configured and published in a Fabric workspace
 
-### Deploy
+### Option A: Deploy to a New AI Foundry Project
+
+Use this when you want `azd` to provision a new AI Foundry account, project, and model deployments from scratch.
 
 ```bash
 # 1. Initialize azd environment
-azd init -e my-env
+azd init -e my-agent
 
-# 2. Set required environment variables
-azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-4o" -e my-env
-azd env set TOOLBOX_NAME "agent-tools" -e my-env
+# 2. Set required agent variables
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-4o" -e my-agent
+azd env set TOOLBOX_NAME "agent-tools" -e my-agent
 
 # 3. Provision infrastructure and deploy
-azd up -e my-env
-
-# 4. Invoke the deployed agent
-azd ai agent invoke --new-session "What data is available?" --timeout 120
+azd up -e my-agent
 ```
+
+`azd` will prompt for subscription, location, and resource group. It creates:
+- An AI Foundry account + project
+- A `gpt-4o` model deployment
+- A Container Registry
+- The hosted agent container
+
+### Option B: Deploy to an Existing AI Foundry Project
+
+Use this when you already have an AI Foundry project with a model deployment and ACR, and you just want to deploy the agent container into it.
+
+#### Step 1: Gather your existing resource details
+
+You need:
+- **Resource group** name (e.g. `ai-hub-rs01`)
+- **AI Foundry account** name — the resource name of the `Microsoft.CognitiveServices/accounts` resource (e.g. `rs-proj-02-resource`)
+- **AI Foundry project** name (e.g. `rs-proj-02`)
+- **Azure region** (e.g. `eastus`)
+- **Azure subscription ID**
+- **ACR connection name** in the Foundry project (e.g. `acr-2ggyehmfq5o6c`)
+- **ACR endpoint** (e.g. `cr2ggyehmfq5o6c.azurecr.io`)
+- **ACR resource ID** (full ARM path to the Container Registry)
+- **Model deployment name** already created in the project (e.g. `gpt-4o`)
+
+> **Tip:** Find these in the [Azure AI Foundry portal](https://ai.azure.com) under your project settings, or via:
+> ```bash
+> # List AI Foundry accounts in a resource group
+> az cognitiveservices account list -g <resource-group> --query "[].{name:name, endpoint:properties.endpoint}" -o table
+>
+> # List projects
+> az rest --method GET --url "https://management.azure.com/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<account>/projects?api-version=2025-04-01-preview"
+>
+> # List ACR connections in the project
+> az rest --method GET --url "<project-endpoint>/connections?api-version=2024-10-01" --resource "https://management.azure.com"
+> ```
+
+#### Step 2: Initialize and configure the azd environment
+
+```bash
+# Initialize
+azd init -e my-existing-project
+
+# Tell azd to use existing infrastructure (skip provisioning)
+azd env set USE_EXISTING_AI_PROJECT "true" -e my-existing-project
+
+# Set Azure identity
+azd env set AZURE_SUBSCRIPTION_ID "<your-subscription-id>" -e my-existing-project
+azd env set AZURE_LOCATION "<region>" -e my-existing-project                    # e.g. eastus
+azd env set AZURE_RESOURCE_GROUP "<resource-group>" -e my-existing-project      # e.g. ai-hub-rs01
+
+# Set AI Foundry account and project
+azd env set AZURE_AI_ACCOUNT_NAME "<account-name>" -e my-existing-project       # e.g. rs-proj-02-resource
+azd env set AZURE_AI_PROJECT_NAME "<project-name>" -e my-existing-project       # e.g. rs-proj-02
+
+# Set Container Registry (required for building/pushing the agent image)
+azd env set AZURE_AI_PROJECT_ACR_CONNECTION_NAME "<acr-connection>" -e my-existing-project   # e.g. acr-2ggyehmfq5o6c
+azd env set AZURE_CONTAINER_REGISTRY_ENDPOINT "<acr-endpoint>" -e my-existing-project       # e.g. cr2ggyehmfq5o6c.azurecr.io
+azd env set AZURE_CONTAINER_REGISTRY_RESOURCE_ID "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ContainerRegistry/registries/<acr-name>" -e my-existing-project
+
+# Set agent-specific variables
+azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "gpt-4o" -e my-existing-project
+azd env set TOOLBOX_NAME "agent-tools" -e my-existing-project
+```
+
+#### Step 3: Deploy
+
+```bash
+azd up -e my-existing-project --no-prompt
+```
+
+Since `USE_EXISTING_AI_PROJECT=true`, `azd` skips Bicep provisioning and only:
+1. Builds the Docker container image
+2. Pushes to the configured ACR
+3. Creates/updates the hosted agent in the Foundry project
+4. Registers environment variables
+
+#### Step 4: Verify
+
+```bash
+# Invoke the agent
+azd ai agent invoke --new-session "What data is available?" --timeout 120
+
+# Or use curl with a Bearer token
+TOKEN=$(az account get-access-token --resource "https://ai.azure.com" --query accessToken -o tsv)
+curl -X POST "https://<account>.services.ai.azure.com/api/projects/<project>/agents/toolbox-langgraph/endpoint/protocols/openai/responses?api-version=2025-11-15-preview" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "What tables are available?"}'
+```
+
+### Configuration Files Reference
+
+The deployment is controlled by three configuration files:
+
+#### `azure.yaml` — azd deployment config
+
+Tells `azd` how to build, package, and deploy the service:
+
+```yaml
+name: ai-foundry-starter-basic
+services:
+  toolbox-langgraph:            # Service name — matches agent.yaml name
+    project: .                  # Build context (root of repo)
+    host: azure.ai.agent        # Deploy as a Foundry hosted agent
+    language: docker            # Build using Dockerfile
+    docker:
+      remoteBuild: true         # Build on ACR (not locally)
+    config:
+      container:
+        resources:
+          cpu: "1"              # Container CPU allocation
+          memory: 2Gi           # Container memory allocation
+      startupCommand: python main.py  # Container entry point
+infra:
+  provider: bicep
+  path: ./infra                 # Bicep templates (skipped when USE_EXISTING_AI_PROJECT=true)
+```
+
+#### `agent.yaml` — hosted agent definition
+
+Defines the agent's runtime configuration in Foundry:
+
+```yaml
+kind: hosted
+name: toolbox-langgraph                     # Agent name (appears in portal)
+description: LangGraph agent with Fabric Data Agent and tools via Foundry toolbox.
+metadata:
+  tags:
+    - AI Agent Hosting
+    - LangGraph
+protocols:
+  - protocol: responses                     # OpenAI Responses API protocol
+    version: 1.0.0
+resources:
+  cpu: "1"
+  memory: 2Gi
+environment_variables:                      # Injected into container at runtime
+  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+    value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}   # Resolved from azd env
+  - name: TOOLBOX_NAME
+    value: ${TOOLBOX_NAME}
+  - name: LANGFUSE_PUBLIC_KEY              # Optional — for observability
+    value: ${LANGFUSE_PUBLIC_KEY}
+  - name: LANGFUSE_SECRET_KEY
+    value: ${LANGFUSE_SECRET_KEY}
+  - name: LANGFUSE_BASE_URL
+    value: ${LANGFUSE_HOST}
+```
+
+Environment variables use `${VAR_NAME}` syntax to reference values from the azd environment. Set them with `azd env set`.
+
+#### `agent.manifest.yaml` — toolbox and resource declaration
+
+Declares what tools and model resources the agent needs:
+
+```yaml
+name: toolbox-langgraph
+template:
+  name: toolbox-langgraph
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+  environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
+    - name: TOOLBOX_NAME
+      value: "agent-tools"
+resources:
+  - kind: model                             # Model deployment
+    id: gpt-4o
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+  - kind: toolbox                           # Toolbox with MCP tools
+    name: agent-tools
+    tools:
+      - type: web_search
+      - type: code_interpreter
+      - type: mcp
+        server_label: fabric-data-agent            # Prefix for tool names
+        project_connection_id: fabric-data-agent-conn  # ← your connection name
+```
+
+#### `infra/main.parameters.json` — Bicep parameters
+
+Maps azd environment variables to Bicep parameters for provisioning. Key parameters for existing projects:
+
+| Parameter | azd Variable | Purpose |
+|-----------|-------------|---------|
+| `useExistingAiProject` | `USE_EXISTING_AI_PROJECT` | Skip provisioning when `true` |
+| `resourceGroupName` | `AZURE_RESOURCE_GROUP` | Target resource group |
+| `aiFoundryResourceName` | `AZURE_AI_ACCOUNT_NAME` | Existing AI Foundry account |
+| `aiFoundryProjectName` | `AZURE_AI_PROJECT_NAME` | Existing project name |
+| `existingContainerRegistryEndpoint` | `AZURE_CONTAINER_REGISTRY_ENDPOINT` | ACR login server URL |
+| `existingContainerRegistryResourceId` | `AZURE_CONTAINER_REGISTRY_RESOURCE_ID` | Full ARM resource ID of ACR |
+| `existingAcrConnectionName` | `AZURE_AI_PROJECT_ACR_CONNECTION_NAME` | Connection name in project |
+
+### azd Environment Variables Reference
+
+Complete list of `azd env set` variables used by this project:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AZURE_SUBSCRIPTION_ID` | Yes | _(prompted)_ | Azure subscription ID |
+| `AZURE_LOCATION` | Yes | _(prompted)_ | Azure region (e.g. `eastus`) |
+| `AZURE_RESOURCE_GROUP` | Yes | _(prompted)_ | Resource group name |
+| `USE_EXISTING_AI_PROJECT` | No | `false` | Set `true` to skip Bicep provisioning |
+| `AZURE_AI_ACCOUNT_NAME` | Yes* | _(provisioned)_ | AI Foundry account name |
+| `AZURE_AI_PROJECT_NAME` | Yes* | _(provisioned)_ | AI Foundry project name |
+| `AZURE_CONTAINER_REGISTRY_ENDPOINT` | Yes* | _(provisioned)_ | ACR login server (e.g. `myacr.azurecr.io`) |
+| `AZURE_CONTAINER_REGISTRY_RESOURCE_ID` | Yes* | _(provisioned)_ | Full ARM ID of the ACR resource |
+| `AZURE_AI_PROJECT_ACR_CONNECTION_NAME` | Yes* | _(provisioned)_ | ACR connection name in the project |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Yes | — | Model deployment name (e.g. `gpt-4o`) |
+| `TOOLBOX_NAME` | Yes | — | Toolbox name (e.g. `agent-tools`) |
+| `FABRIC_MCP_ENDPOINT` | No | — | Direct Fabric MCP endpoint (alternative to toolbox) |
+| `LANGFUSE_PUBLIC_KEY` | No | — | Langfuse public key (enables tracing) |
+| `LANGFUSE_SECRET_KEY` | No | — | Langfuse secret key |
+| `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Langfuse base URL |
+
+_*Required when `USE_EXISTING_AI_PROJECT=true`. Otherwise auto-provisioned by Bicep._
 
 ## Quick Start (Local)
 
