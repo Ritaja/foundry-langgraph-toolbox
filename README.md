@@ -369,7 +369,7 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 Tracing activates automatically when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set. If they are not set, the agent runs normally without any Langfuse dependency at runtime.
 
-> **Note:** Foundry hosted agent containers may have restricted outbound network access. If traces don't appear in the Langfuse dashboard when deployed as a hosted agent, the container likely cannot reach the Langfuse endpoint. Tracing works reliably when running locally (`python main.py`). The agent operates normally regardless — Langfuse failures are silently handled.
+> **Known Limitation:** Foundry hosted agent containers block outbound network access to non-Azure-service endpoints. Traces will **not** appear in the Langfuse dashboard (cloud or self-hosted) when running as a hosted agent — the container cannot reach external HTTP endpoints, including self-hosted instances on VMs in the same resource group. Tracing works correctly when running locally (`python main.py`) or in any environment with unrestricted outbound access. The agent operates normally regardless — Langfuse initialization failures are silently handled and do not affect agent functionality.
 
 ## Contributing
 
