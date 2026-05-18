@@ -301,7 +301,7 @@ curl -X POST http://localhost:8088/responses \
 | `TOOLBOX_ENDPOINT` | No | Full toolbox MCP endpoint URL (alternative to `TOOLBOX_NAME`) |
 | `LANGFUSE_PUBLIC_KEY` | No | Langfuse public key — enables tracing when set together with secret key |
 | `LANGFUSE_SECRET_KEY` | No | Langfuse secret key |
-| `LANGFUSE_HOST` | No | Langfuse host URL (defaults to `https://cloud.langfuse.com`) |
+| `LANGFUSE_BASE_URL` | No | Langfuse base URL (defaults to `https://cloud.langfuse.com`) |
 
 ## Project Structure
 
@@ -364,10 +364,12 @@ The agent supports [Langfuse](https://langfuse.com/) for tracing and observabili
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 # Optional — defaults to https://cloud.langfuse.com
-LANGFUSE_HOST=https://cloud.langfuse.com
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
 Tracing activates automatically when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set. If they are not set, the agent runs normally without any Langfuse dependency at runtime.
+
+> **Note:** Foundry hosted agent containers may have restricted outbound network access. If traces don't appear in the Langfuse dashboard when deployed as a hosted agent, the container likely cannot reach the Langfuse endpoint. Tracing works reliably when running locally (`python main.py`). The agent operates normally regardless — Langfuse failures are silently handled.
 
 ## Contributing
 

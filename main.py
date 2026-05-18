@@ -46,7 +46,6 @@ if _langfuse_enabled:
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
             base_url=os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-            debug=True,
         )
     except Exception as _lf_err:
         logging.getLogger(__name__).warning(f"Langfuse init failed: {_lf_err} — tracing disabled")
